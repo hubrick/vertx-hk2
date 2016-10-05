@@ -23,7 +23,11 @@
 
 package com.englishtown.vertx.hk2;
 
-import io.vertx.core.*;
+import io.vertx.core.AbstractVerticle;
+import io.vertx.core.Context;
+import io.vertx.core.Future;
+import io.vertx.core.Verticle;
+import io.vertx.core.Vertx;
 import io.vertx.core.impl.verticle.CompilingClassLoader;
 import io.vertx.core.json.JsonArray;
 import io.vertx.core.json.JsonObject;
@@ -36,6 +40,8 @@ import org.glassfish.hk2.utilities.ServiceLocatorUtilities;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * HK2 Verticle to lazy load the real verticle with DI
@@ -50,6 +56,8 @@ public class HK2VerticleLoader extends AbstractVerticle {
     private Verticle realVerticle;
     private ServiceLocator locator;
 
+    private static final Map<Thread, ServiceLocator> serviceLocatorCache = new ConcurrentHashMap<>();
+    public static final String CONFIG_EVENT_LOOP_SINGLETON_SERVICE_LOCATOR_NAME = "hk2_singleton_service_locator";
     public static final String CONFIG_BOOTSTRAP_BINDER_NAME = "hk2_binder";
     public static final String BOOTSTRAP_BINDER_NAME = "com.englishtown.vertx.hk2.BootstrapBinder";
 
@@ -156,7 +164,28 @@ public class HK2VerticleLoader extends AbstractVerticle {
     }
 
     private Verticle createRealVerticle(Class<?> clazz) throws Exception {
+        if(config().getBoolean(CONFIG_EVENT_LOOP_SINGLETON_SERVICE_LOCATOR_NAME, Boolean.valueOf(System.getProperty(CONFIG_EVENT_LOOP_SINGLETON_SERVICE_LOCATOR_NAME, "false")))) {
+            if(!serviceLocatorCache.containsKey(Thread.currentThread())) {
+                // Each verticle factory will have it's own service locator instance
+                // Passing a null name will not cache the locator in the factory
+                locator = ServiceLocatorFactory.getInstance().create(null, parent);
+                serviceLocatorCache.put(Thread.currentThread(), locator);
+                logger.info("Caching locator for thread " + Thread.currentThread().getName());
+                return bindToVerticle(clazz, locator);
+            } else {
+                locator = serviceLocatorCache.get(Thread.currentThread());
+                logger.info("Retrieving cached locator for thread " + Thread.currentThread().getName());
+                return bindToVerticle(clazz, locator);
+            }
+        } else {
+            // Each verticle factory will have it's own service locator instance
+            // Passing a null name will not cache the locator in the factory
+            locator = ServiceLocatorFactory.getInstance().create(null, parent);
+            return bindToVerticle(clazz, locator);
+        }
+    }
 
+    private Verticle bindToVerticle(Class clazz, ServiceLocator locator) throws IllegalAccessException, InstantiationException {
         JsonObject config = config();
         Object field = config.getValue(CONFIG_BOOTSTRAP_BINDER_NAME);
         JsonArray bootstrapNames;
@@ -185,10 +214,6 @@ public class HK2VerticleLoader extends AbstractVerticle {
                         + " was not found.  Are you missing injection bindings?");
             }
         }
-
-        // Each verticle factory will have it's own service locator instance
-        // Passing a null name will not cache the locator in the factory
-        locator = ServiceLocatorFactory.getInstance().create(null, parent);
 
         bootstraps.add(0, new HK2VertxBinder(vertx));
         ServiceLocatorUtilities.bind(locator, bootstraps.toArray(new Binder[bootstraps.size()]));
