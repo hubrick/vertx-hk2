@@ -198,7 +198,7 @@ public class HK2VerticleLoader extends AbstractVerticle {
                 serviceLocatorVerticleInstanceCount.get(locator).incrementAndGet();
 
                 logger.info("Retrieving cached locator " + locator.getLocatorId() + " for thread " + Thread.currentThread().getName() + " and cache key " + key);
-                return bindToVerticle(clazz, locator, bootstrapBinderClasses);
+                return (Verticle) locator.createAndInitialize(clazz);
             }
         } else {
             // Each verticle factory will have it's own service locator instance
